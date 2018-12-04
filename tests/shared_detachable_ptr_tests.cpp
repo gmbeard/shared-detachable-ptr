@@ -94,11 +94,61 @@ auto detach_test() {
     assert(destroyed && "destroyed == false!");
 }
 
+auto pointer_element_test() {
+    auto element = size_t { 42 };
+    auto p = make_shared_detachable<size_t const*>(&element);
+
+    assert(*p == &element && "*p != &element!");
+}
+
+template<typename...>
+using VoidType = void;
+
+template<typename Void, template <typename...> class Test, typename... Args>
+struct TypeTest : std::false_type { };
+
+template<template <typename...> class Test, typename... Args>
+struct TypeTest<Test<Args...>, Test, Args...> : std::true_type { };
+
+template<typename T, typename From>
+using PtrAssignable = decltype(*std::declval<T>() = std::declval<From>());
+
+auto const_test() {
+    auto p = make_shared_detachable<size_t const>(42);
+
+    constexpr auto v = TypeTest<void, 
+                                PtrAssignable, 
+                                decltype(p), 
+                                size_t>::value;
+    assert(!v && 
+        "assignment to dereferenced const value shouldn't be allowed!");
+}
+
+auto block_is_standard_layout_test() {
+    constexpr bool v = std::is_standard_layout_v<SharedBlock<size_t>>;
+    assert(v && "SharedBlock<T> isn't standard layout!");
+
+    auto p = make_shared_detachable<size_t>(42);
+
+    auto* block = p.detach();
+    **reinterpret_cast<size_t**>(block) = 43;
+
+    assert(*block->value == 43 && "block->value != 43!");
+
+    p = SharedDetachablePtr<size_t> { shared_detachable_ptr_unsafety,
+                                      block };
+
+    assert(*p == 43 && "*p != 43!");
+}
+
 auto main() -> int {
     run_tests({
         construct_test,
         destructor_test,
-        detach_test
+        detach_test,
+        pointer_element_test,
+        const_test,
+        block_is_standard_layout_test
     });
 
     return 0;

@@ -135,18 +135,23 @@ constexpr auto shared_detachable_ptr_unsafety =
 template<typename T>
 struct SharedDetachablePtr {
 
+    static_assert(!std::is_reference_v<T>,
+                  "SharedDetachablePtr cannot hold reference types!");
+    static_assert(!std::is_array_v<T>,
+                  "SharedDetachablePtr cannot hold array types!");
+
     using value_type = T;
     using pointer = value_type*;
-    using const_pointer = typename
-        std::conditional<std::is_const<T>::value,
-                         value_type*,
-                         value_type const*>::type;
+    using const_pointer = std::conditional_t<
+        std::is_const_v<std::remove_pointer_t<value_type>>,
+        value_type*,
+        value_type const*>;
 
     using reference = value_type&;
-    using const_reference = typename
-        std::conditional<std::is_const<T>::value,
-                         value_type&,
-                         value_type const&>::type;
+    using const_reference = std::conditional_t<
+        std::is_const_v<std::remove_pointer_t<value_type>>,
+        value_type&,
+        value_type const&>;
 
     SharedDetachablePtr() noexcept :
         ptr_ { nullptr }
@@ -156,7 +161,7 @@ struct SharedDetachablePtr {
     // The caller must guarantee that `ptr` contains
     // a non-zero reference count...
     SharedDetachablePtr(SharedDetachablePtrUnsafety, 
-                        SharedBlock<T>* ptr) noexcept :
+                        SharedBlock<value_type>* ptr) noexcept :
         ptr_ { ptr }
     { }
 
@@ -178,7 +183,7 @@ struct SharedDetachablePtr {
                      SharedDetachablePtr& rhs) noexcept
     {
         using std::swap;
-        swap(lhs.ptr_, rhs.ptr);
+        swap(lhs.ptr_, rhs.ptr_);
     }
 
     auto operator=(SharedDetachablePtr const& other) noexcept
@@ -235,7 +240,7 @@ struct SharedDetachablePtr {
     }
 
 private:
-    SharedBlock<T>* ptr_;
+    SharedBlock<value_type>* ptr_;
 };
 
 template<typename T>
@@ -342,8 +347,10 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
 
 template<typename T, typename... Args>
 auto make_shared_detachable(Args&&... args) -> SharedDetachablePtr<T> {
-    return allocate_shared_detachable<T>(std::allocator<T> { },
-                                         std::forward<Args>(args)...);
+    return allocate_shared_detachable<T>(
+        std::allocator<std::decay_t<T>> { },
+        std::forward<Args>(args)...
+    );
 }
 
 }
