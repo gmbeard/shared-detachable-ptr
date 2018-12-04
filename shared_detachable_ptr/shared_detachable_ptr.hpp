@@ -12,7 +12,6 @@ namespace utils {
 struct SharedBlockAllocBase;
 
 struct SharedBlockAllocVTable {
-    void (*destroy)(SharedBlockAllocBase*, void*);
     void (*deallocate)(SharedBlockAllocBase*, void*, size_t);
 };
 
@@ -22,7 +21,7 @@ struct SharedBlockAllocBase {
 
 template<typename T>
 struct SharedBlock {
-    T* value;
+    T value;
     std::atomic_size_t ref_count;
     SharedBlockAllocBase* alloc;
 };
@@ -31,20 +30,7 @@ template<typename T>
 struct AllocatorWrapper : SharedBlockAllocBase {
 
     using InnerValueType = typename T::value_type;
-
-    static auto destroy_impl(SharedBlockAllocBase* base, void* ptr) {
-        auto* this_ = static_cast<AllocatorWrapper*>(base);
-        
-        using Rebind = typename
-            std::allocator_traits<T>
-                ::template rebind_alloc<InnerValueType>;
-
-        Rebind alloc { this_->inner_ };
-        std::allocator_traits<Rebind>::destroy(
-            alloc, 
-            static_cast<SharedBlock<InnerValueType>*>(ptr)->value
-        );
-    }
+    using BlockType = SharedBlock<InnerValueType>;
 
     static auto deallocate_impl(SharedBlockAllocBase* base, 
                                 void* ptr, 
@@ -52,26 +38,16 @@ struct AllocatorWrapper : SharedBlockAllocBase {
     {
         auto* this_ = static_cast<AllocatorWrapper*>(base);
         
-        using ValueRebind = typename
-            std::allocator_traits<T>
-                ::template rebind_alloc<InnerValueType>;
-
         using BlockRebind = typename
             std::allocator_traits<T>
-                ::template rebind_alloc<SharedBlock<InnerValueType>>;
+                ::template rebind_alloc<BlockType>;
 
         using AllocRebind = typename
             std::allocator_traits<T>::template rebind_alloc<AllocatorWrapper>;
 
-        ValueRebind value_alloc { this_->inner_ };
         AllocRebind alloc_alloc { this_->inner_ };
         BlockRebind block_alloc { this_->inner_ };
 
-        std::allocator_traits<ValueRebind>::deallocate(
-            value_alloc,
-            static_cast<SharedBlock<InnerValueType>*>(ptr)->value,
-            n
-        );
                                         
         std::allocator_traits<AllocRebind>::destroy(
             alloc_alloc,
@@ -84,14 +60,11 @@ struct AllocatorWrapper : SharedBlockAllocBase {
             1
         );
 
-        std::allocator_traits<BlockRebind>::destroy(
-            block_alloc, 
-            static_cast<SharedBlock<InnerValueType>*>(ptr)
-        );
+        static_cast<BlockType*>(ptr)->~BlockType();
 
         std::allocator_traits<BlockRebind>::deallocate(
             block_alloc, 
-            static_cast<SharedBlock<InnerValueType>*>(ptr),
+            static_cast<BlockType*>(ptr),
             n
         );
     }
@@ -108,13 +81,11 @@ private:
 
 template<typename Inner>
 SharedBlockAllocVTable AllocatorWrapper<Inner>::wrapper_vtable_ = {
-    &AllocatorWrapper<Inner>::destroy_impl,
     &AllocatorWrapper<Inner>::deallocate_impl
 };
 
 template<typename T>
 auto delete_shared_block(SharedBlock<T>* ptr) {
-    ptr->alloc->vtable->destroy(ptr->alloc, ptr);
     ptr->alloc->vtable->deallocate(ptr->alloc, ptr, 1);
 }
 
@@ -152,6 +123,8 @@ struct SharedDetachablePtr {
         std::is_const_v<std::remove_pointer_t<value_type>>,
         value_type&,
         value_type const&>;
+
+    using block_type = SharedBlock<value_type>;
 
     SharedDetachablePtr() noexcept :
         ptr_ { nullptr }
@@ -212,7 +185,7 @@ struct SharedDetachablePtr {
 
     auto operator->() noexcept -> pointer {
         assert(!is_empty() && "Dereferencing empty SharedDetachablePtr!");
-        return ptr_->value;
+        return std::addressof(ptr_->value);
     }
 
     auto operator->() const noexcept -> const_pointer {
@@ -270,37 +243,14 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
     AllocRebind alloc_alloc { alloc };
     BlockRebind block_alloc { alloc };
 
-    auto* inner_type = 
-        std::allocator_traits<Alloc>::allocate(alloc, 1);
-
-    std::allocator_traits<Alloc>::construct(
-        alloc, 
-        inner_type, 
-        std::forward<Args>(args)...
-    );
-
     typename AllocRebind::value_type* inner_alloc = nullptr;
 
-    try {
-        inner_alloc = 
-            std::allocator_traits<AllocRebind>::allocate(alloc_alloc, 1);
+    inner_alloc = 
+        std::allocator_traits<AllocRebind>::allocate(alloc_alloc, 1);
 
-        std::allocator_traits<AllocRebind>::construct(alloc_alloc,
-                                                      inner_alloc,
-                                                      alloc);
-    }
-    catch (...) {
-        std::allocator_traits<Alloc>::destroy(alloc, inner_type);
-        std::allocator_traits<Alloc>::deallocate(alloc, inner_type, 1);
-
-        if (inner_alloc) {
-            std::allocator_traits<AllocRebind>::deallocate(alloc_alloc,
-                                                           inner_alloc,
-                                                           1);
-        }
-
-        throw;
-    }
+    std::allocator_traits<AllocRebind>::construct(alloc_alloc,
+                                                  inner_alloc,
+                                                  alloc);
 
     typename BlockRebind::value_type* block = nullptr;
     try {
@@ -310,15 +260,14 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
                 1
             );
 
-        std::allocator_traits<BlockRebind>::construct(
-            block_alloc,
-            block
-        );
+        new (block) SharedBlock<T> {
+            std::forward<Args>(args)...,
+            1,
+            inner_alloc
+        };
+
     }
     catch (...) {
-
-        std::allocator_traits<Alloc>::destroy(alloc, inner_type);
-        std::allocator_traits<Alloc>::deallocate(alloc, inner_type, 1);
 
         std::allocator_traits<AllocRebind>::destroy(alloc_alloc,
                                                     inner_alloc);
@@ -335,8 +284,6 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
         throw;
     }
 
-    block->value = inner_type;
-    block->ref_count = 1;
     block->alloc = inner_alloc;
 
     return SharedDetachablePtr<T> { 

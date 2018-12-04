@@ -30,6 +30,13 @@ struct A {
 
     auto operator=(A const&) -> A& = delete;
 
+    auto value() const noexcept -> bool* { return value_; }
+
+    // `dummy` and `value_` must have different access
+    // control to ensure type isn't StandardLayoutType
+    size_t* dummy = nullptr;
+
+private:
     bool* value_;
 };
 
@@ -42,7 +49,7 @@ auto run_tests(std::initializer_list<TestType> tests) {
 
 auto construct_test() {
     auto p = allocate_shared_detachable<size_t>(std::allocator<size_t> { },
-                                                42);
+                                                size_t { 42 });
     assert(*p == 42 && "*p != 42!");
 }
 
@@ -55,7 +62,7 @@ auto destructor_test() {
                                                A { &destroyed });
         {
             auto p2 = p;
-            assert(p2->value_ == p->value_ && "p2->value_ != p->value_!");
+            assert(p2->value() == p->value() && "p2->value_ != p->value_!");
         }
 
         assert(!destroyed && "destroyed == true!");
@@ -114,7 +121,7 @@ template<typename T, typename From>
 using PtrAssignable = decltype(*std::declval<T>() = std::declval<From>());
 
 auto const_test() {
-    auto p = make_shared_detachable<size_t const>(42);
+    auto p = make_shared_detachable<size_t const>(size_t { 42 });
 
     constexpr auto v = TypeTest<void, 
                                 PtrAssignable, 
@@ -125,15 +132,27 @@ auto const_test() {
 }
 
 auto block_is_standard_layout_test() {
-    constexpr bool v = std::is_standard_layout_v<SharedBlock<size_t>>;
-    assert(v && "SharedBlock<T> isn't standard layout!");
+    static_assert(!std::is_standard_layout_v<A>, 
+                  "`A` must not be a StandardLayoutType to satisfy "
+                  "this test!");
 
-    auto p = make_shared_detachable<size_t>(42);
+    constexpr bool v = 
+        std::is_standard_layout_v<
+            typename SharedDetachablePtr<size_t>::block_type>;
+
+    constexpr bool f =
+        std::is_standard_layout_v<
+            typename SharedDetachablePtr<A>::block_type>;
+
+    assert(v && "SharedBlock<size_t> *isn't* standard layout!");
+    assert(!f && "SharedBlock<A> *is* standard layout!");
+
+    auto p = make_shared_detachable<size_t>(size_t { 42 });
 
     auto* block = p.detach();
-    **reinterpret_cast<size_t**>(block) = 43;
+    *reinterpret_cast<size_t*>(block) = 43;
 
-    assert(*block->value == 43 && "block->value != 43!");
+    assert(block->value == 43 && "block->value != 43!");
 
     p = SharedDetachablePtr<size_t> { shared_detachable_ptr_unsafety,
                                       block };
