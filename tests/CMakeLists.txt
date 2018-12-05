@@ -21,26 +21,27 @@ add_test(
     COMMAND shared_detachable_ptr_tests
 )
 
-add_executable(
-    example
-    example.cpp
-)
+if(WIN32)
+    add_executable(
+        example
+        example.cpp
+    )
 
-target_link_libraries(
-    example
-    PRIVATE
-        SharedDetachablePtr::SharedDetachablePtr
-)
+    target_link_libraries(
+        example
+        PRIVATE
+            SharedDetachablePtr::SharedDetachablePtr
+    )
 
-target_compile_options(
-    example
-    PRIVATE
-        $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /permissive- /analyze>
-        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Werror -Wextra>
-)
+    target_compile_options(
+        example
+        PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /permissive- /analyze>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Werror -Wextra>
+    )
 
-#add_test(
-#    NAME Example
-#    COMMAND example
-#)
-
+    add_test(
+        NAME Example
+        COMMAND example
+    )
+endif()

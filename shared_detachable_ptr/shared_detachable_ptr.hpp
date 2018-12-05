@@ -21,6 +21,13 @@ struct SharedBlockAllocBase {
 
 template<typename T>
 struct SharedBlock {
+    template<typename... Args>
+    SharedBlock(SharedBlockAllocBase* a, Args&&... args) :
+        value { std::forward<Args>(args)... }
+    ,   ref_count { 1 }
+    ,   alloc { a }
+    { }
+
     T value;
     std::atomic_size_t ref_count;
     SharedBlockAllocBase* alloc;
@@ -60,7 +67,10 @@ struct AllocatorWrapper : SharedBlockAllocBase {
             1
         );
 
-        static_cast<BlockType*>(ptr)->~BlockType();
+        std::allocator_traits<BlockRebind>::destroy(
+            block_alloc,
+            static_cast<BlockType*>(ptr)
+        );
 
         std::allocator_traits<BlockRebind>::deallocate(
             block_alloc, 
@@ -232,6 +242,9 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
     //  This function could do with a `ERROR_GUARD`-style RAII
     //  mechanism.
 
+    //  TODO(GB):
+    //  Handle `T const`.
+
     using AllocRebind = typename
         std::allocator_traits<Alloc>
             ::template rebind_alloc<AllocatorWrapper<Alloc>>;
@@ -260,11 +273,12 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
                 1
             );
 
-        new (block) SharedBlock<T> {
-            std::forward<Args>(args)...,
-            1,
-            inner_alloc
-        };
+        std::allocator_traits<BlockRebind>::construct(
+            block_alloc,
+            block,
+            inner_alloc,
+            std::forward<Args>(args)...
+        );
 
     }
     catch (...) {
@@ -283,8 +297,6 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
 
         throw;
     }
-
-    block->alloc = inner_alloc;
 
     return SharedDetachablePtr<T> { 
         shared_detachable_ptr_unsafety,
