@@ -261,9 +261,17 @@ auto allocate_shared_detachable(Alloc alloc, Args&&... args)
     inner_alloc = 
         std::allocator_traits<AllocRebind>::allocate(alloc_alloc, 1);
 
-    std::allocator_traits<AllocRebind>::construct(alloc_alloc,
-                                                  inner_alloc,
-                                                  alloc);
+    try {
+        std::allocator_traits<AllocRebind>::construct(alloc_alloc,
+                                                      inner_alloc,
+                                                      alloc);
+    }
+    catch (...) {
+        std::allocator_traits<AllocRebind>::deallocate(alloc_alloc, 
+                                                       inner_alloc,
+                                                       1);
+        throw;
+    }
 
     typename BlockRebind::value_type* block = nullptr;
     try {
